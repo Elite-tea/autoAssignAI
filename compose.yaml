@@ -1,1 +1,136 @@
+version: '3'
 services:
+  db:
+    image: postgres:15
+    container_name: autoAssignAiDB
+    ports:
+      - "5432:5432"
+    volumes:
+      - /var/lib/postgresql/database
+    environment:
+      - POSTGRES_USER=data
+      - POSTGRES_PASSWORD=data1234567890
+      - POSTGRES_DB=autoAssign
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  gemma-api:
+        build: .
+        image: gemma-api:latest
+        container_name: gemma-support
+        restart: unless-stopped
+        ports:
+          - "5001:5001"
+        environment:
+        - MODEL=/models/emma-3-27B-it-QAT-Q4_0.gguf
+        - GPU_LAYERS=40
+        - HOST=0.0.0.0
+        - PORT=5001
+        - CONTEXT_SIZE=2048
+        - CUDA_VISIBLE_DEVICES=0
+        - GGML_CUDA_FORCE_MMQ=1
+        - GGML_CUDA_FORCE_DMMV=1
+        volumes:
+          - ./models:/models
+          - ./training_data:/data
+        deploy:
+          resources:
+            reservations:
+              devices:
+                - driver: nvidia
+                  count: 1
+                  capabilities: [gpu]
+        command: /bin/bash -c "export CUDA_VISIBLE_DEVICES=0 && /app/init.sh && cd /app && uvicorn api:app --host 0.0.0.0 --port 5001 --timeout-keep-alive 300"
+
+      # Дополнительный сервис для дообучения (опционально)
+  finetune:
+        build: .
+        image: gemma-api:latest
+        container_name: gemma-finetune
+        depends_on:
+          - gemma-api
+        volumes:
+          - ./models:/models
+          - ./training_data:/data
+          - ./loras:/loras
+        deploy:
+          resources:
+            reservations:
+              devices:
+                - driver: nvidia
+                  count: 1
+                  capabilities: [ gpu ]
+        command: /bin/bash -c "cd /llama.cpp && ./main --train-data /data/training_data.txt --model ${MODEL_PATH} --lora-output /loras/lora_gemma_claims.bin --lora 16 --threads ${NUM_THREADS} --batch ${BATCH_SIZE} --ctx ${CONTEXT_SIZE} --n-gpu-layers ${GPU_LAYERS} --use-checkpointing"
+        profiles:
+          - finetune
+
+  llama-server:
+    build: .
+    container_name: llama-gemma-server
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./models:/app/models
+    ports:
+      - "8080:8080"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
+
+  llama-gpu:
+    image: ghcr.io/ggerganov/llama.cpp:full-cuda
+    container_name: llama-gemma-gpu
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - DGGML_CUDA=1
+    volumes:
+      - ./models:/models
+    ports:
+      - "8080:8080"
+    command: >
+      --server
+      -m /models/gemma-3-27B-it-QAT-Q4_0.gguf
+      --gpu-layers 99
+      --main-gpu 0
+      --tensor-split 1
