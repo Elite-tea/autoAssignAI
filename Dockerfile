@@ -26,6 +26,6 @@ EXPOSE 8080
 
 CMD ["/llama.cpp/build/bin/server", \
     "-m", "/app/models/gemma-3-27B-it-QAT-Q4_0.gguf", \
-    "--n-gpu-layers", "99", \
+    "--n-gpu-layers", "40", \
     "--host", "0.0.0.0", \
-    "--port", "8080"]
+    "--port", "5001"]

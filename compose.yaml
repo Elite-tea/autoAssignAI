@@ -127,10 +127,12 @@ services:
     volumes:
       - ./models:/models
     ports:
-      - "8080:8080"
+      - "5001:5001"
     command: >
       --server
       -m /models/gemma-3-27B-it-QAT-Q4_0.gguf
-      --gpu-layers 99
-      --main-gpu 0
+      --gpu-layers 63
+      --no-mmap
+      --mlock
+      --main-gpu 1 
       --tensor-split 1
